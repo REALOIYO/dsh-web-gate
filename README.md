@@ -3,73 +3,71 @@
 [![dsh plugin](https://img.shields.io/badge/dsh-plugin-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
 [![license](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)](LICENSE)
 
-给 **DeepSeek Harness** 加一层带密码的局域网网关：手机连同一个 WiFi，浏览器打开就能用电脑上的 DSH。
+为 DeepSeek Harness 提供带密码认证的局域网网关。同一网段内的设备可通过浏览器访问运行在桌面端的 DSH 实例。
 
-不改 DSH 的界面。只往 HTML 里注入一小段 polyfill——手机页面不是安全上下文，少了它**只能读不能写**（见下）。
+不修改 DSH 界面。仅注入一段 polyfill——非安全上下文下写入路径不可用，见下文。
 
-## 为什么需要
+## 背景
 
-`dsh --profile web` 只监听 loopback，局域网里的手机连不上。官方那条反代路子（`--public-url` + `--trusted-host`）**桌面版走不了**：
+`dsh --profile web` 只监听 loopback。官方反代方案（`--public-url` + `--trusted-host`）不适用于桌面版：
 
-- Electron 拉起 Host，命令行参数你碰不到；
-- 端口每次启动都换，写不进反代配置；
-- 根路径必须带一次只在进程内存里的 `?token=` 才能换到会话 Cookie。
+- Host 由 Electron 拉起，无法追加命令行参数；
+- 端口每次启动动态分配，无法预先写入反代配置；
+- 根路径需携带仅存在于进程内存中的 `?token=` 才能换取会话 Cookie。
 
-所以得**在 Host 进程里**做网关。本插件就跑在 Host 进程内，能直接拿到 `ctx.webServer.port` 与 `ctx.connection.authenticatedUrl()`。
+网关因此实现在 Host 进程内，可直接读取 `ctx.webServer.port` 与 `ctx.connection.authenticatedUrl()`。
 
 ## 安装
 
-还没发布到 npm，直接从仓库装：
+尚未发布至 npm，从仓库安装：
 
 ```sh
 dsh plugin --profile desktop add github:REALOIYO/dsh-web-gate
 ```
 
-装完重启 DSH。地址和密码会打进日志，也出现在 **设置 → 手机网关**（带复制与换密码）。
-
-手机连同一个 WiFi，浏览器打开 `http://<电脑局域网IP>:3082`，输密码。
+安装后重启 DSH。监听地址与密码写入日志，同时显示在 **设置 → 手机网关**（支持复制与改密）。客户端与主机处于同一网段时，浏览器访问 `http://<主机局域网IP>:3082` 并输入密码。
 
 ## 配置
 
-写在 `$DSH_HOME/dsh-web-gate/settings.json`，改完重启：
+配置文件为 `$DSH_HOME/dsh-web-gate/settings.json`，修改后重启生效。
 
-| 键 | 默认 | 说明 |
+| 键 | 默认值 | 说明 |
 |---|---|---|
 | `port` | `3082` | 监听端口 |
 | `host` | `"0.0.0.0"` | 监听地址 |
-| `password` | 随机 10 位 | 访问密码，至少 8 位；设置页里也能自定义 |
-| `secret` | 随机 32 字节 | 会话签名密钥，**别改**（改了等于全体登出） |
+| `password` | 随机 10 位 | 访问密码，最少 8 位，可在设置页自定义 |
+| `secret` | 随机 32 字节 | 会话签名密钥，修改将使全部会话失效 |
 
-优先级：profile patch 里的 `config` > `settings.json` > 新生成的随机值。
+优先级：profile patch 中的 `config` > `settings.json` > 随机生成。
 
-**换密码 = 所有已登录设备立刻失效**（会话 Cookie = `HMAC(secret, password)`）。这是特性，不是 bug。
+会话 Cookie 由 `HMAC(secret, password)` 派生，因此改密等同于注销全部已登录设备。
 
-## 它做的三件事
+## 实现
 
-**1. 自己完成 token 握手。** 网关内部先请求一次带 launch token 的 `/`，换来会话 Cookie 再转发你的请求——手机端看不到那个 303。
+**token 握手。** 网关先在内部以 launch token 请求 `/` 并取得会话 Cookie，再转发外部请求，客户端不会观察到 303。
 
-**2. 上游 Cookie 全部扣在服务端。** DSH 的认证 Cookie 名是 `dsh-auth-<sha256(host:port)>`，**名字里带端口**；桌面版每次启动端口都变、旧 Cookie 又不清理，于是越攒越多。攒到 71 个时仅 Cookie 头就约 16.4 KB，撞穿 Node 的 16 KB 请求头上限 → **HTTP 431**，DSH 以「Web authentication failed」的面目起不来。所以上游的 `Set-Cookie` 一律拦下存内存、只注入当前那一个；手机侧永远只有一个 `dsh_gate_session`。
+**上游 Cookie 拦截。** DSH 的认证 Cookie 名为 `dsh-auth-<sha256(host:port)>`，含端口成分；桌面版每次启动端口变化且不清理旧 Cookie，条目持续累积。累积至 71 个时 Cookie 头约 16.4 KB，触及 Node 的 16 KB 请求头上限，返回 **HTTP 431**，表现为 DSH 报「Web authentication failed」而无法启动。网关拦截全部上游 `Set-Cookie`，仅在内存中保留当前一个；客户端侧只存在 `dsh_gate_session`。
 
-**3. 注入一段 polyfill（必须的）。** 手机从 `http://<局域网IP>` 进来，两个前提都不成立：
+**polyfill 注入。** 客户端经 `http://<局域网IP>` 访问时，两个前提不成立：
 
-- **不是安全上下文** → `crypto.randomUUID` 是 `undefined`，而 DSH 连接层拿它 mint connectionId / sessionId / messageId；`AbortSignal.any` 在部分安卓浏览器上也缺失。缺了就是「能读不能写」。
-- **hostname 不是回环** → DSH 把「设置能不能写」绑在这个判定上（`isLoopback ? 'host' : 'memory'`），设置镜像于是退化成内存模式，写入不回后端——表现就是「暂时无法保存确认状态」，点多少次都一样。
+- 非安全上下文：`crypto.randomUUID` 为 `undefined`，而 DSH 连接层用它生成 connectionId / sessionId / messageId；`AbortSignal.any` 在部分浏览器亦缺失。缺失时表现为可读不可写。
+- hostname 非回环：DSH 将设置持久化方式绑定于该判定（`isLoopback ? 'host' : 'memory'`），镜像退化为内存模式，写入不落后端，界面持续提示无法保存。
 
-注入只在 API 缺失时生效、不覆盖原生实现，用 `data-dsh-gate-polyfill` 标记判重。为了能注入，**文档请求会去掉 `accept-encoding`**（压缩流上做文本注入会损坏页面），JS/CSS/字体照常压缩。
+注入仅在 API 缺失时执行，不覆盖原生实现，以 `data-dsh-gate-polyfill` 属性判重。文本注入要求响应体未压缩，故文档请求移除 `accept-encoding`；JS / CSS / 字体保持压缩。
 
 ## 安全
 
-- **密码是唯一那道门。** 网关能执行你电脑上的代码，别把地址和密码发到群里。
-- 登录限速：单 IP 一分钟错 5 次锁 60 秒，全局一分钟错 50 次锁 30 秒。会话 Cookie 为 `HttpOnly` + `SameSite=Lax`，校验走常量时间比较。
-- **默认只该在可信局域网里用**——它走明文 HTTP，同网段能嗅探的人可以抓到密码。要跨网络用，叠一层 WireGuard / Tailscale，别直接开公网。
-- 密码明文存在 `settings.json`（0600），因为要拿它派生会话密钥，同机其他管理员账户可读。
+- 密码为唯一凭证。网关可在主机上执行代码，凭据不应外传。
+- 登录限速：单 IP 每分钟 5 次失败锁定 60 秒，全局每分钟 50 次失败锁定 30 秒。会话 Cookie 为 `HttpOnly` + `SameSite=Lax`，校验使用常量时间比较。
+- 流量为明文 HTTP，同网段可嗅探密码，仅应在可信局域网内使用。跨网络部署需叠加 WireGuard / Tailscale 等隧道，不应直接暴露公网。
+- 密码以明文存于 `settings.json`（0600）用于派生会话密钥，同机其他管理员账户可读。
 
-## 已知限制
+## 限制
 
-- 不做公网隧道，也不做移动端适配；窄屏下好不好看是 DSH 自己的事。
-- 没有二维码（装了 `qrcode-terminal` 就会打印）。
-- WebSocket 认证只在握手时检查一次，之后靠上游维持——与浏览器直连的行为一致。
-- 一律把 `Host` / `Origin` / `Referer` / `Sec-Fetch-Site` 改写成 loopback。若你的部署依赖真实 Host（比如用了 `--trusted-host`），这套改写需要相应调整。
+- 不提供公网隧道与移动端适配。
+- 不生成二维码（安装 `qrcode-terminal` 时输出）。
+- WebSocket 认证仅在握手阶段校验一次，与浏览器直连行为一致。
+- `Host` / `Origin` / `Referer` / `Sec-Fetch-Site` 统一改写为 loopback。若部署依赖真实 Host，需相应调整。
 
 ## 开发
 
@@ -77,7 +75,7 @@ dsh plugin --profile desktop add github:REALOIYO/dsh-web-gate
 node --test test/*.test.js
 ```
 
-60 个测试。`test/proxy.test.js` 会起真实 HTTP，用假上游模拟 DSH 的 401 / 303+Cookie / 200，验证握手、头改写、Cookie 卫生与限速；`test/inject.test.js` 会把注入的脚本**真的执行一遍**，确认 polyfill 产出的 UUID 合法、原生存在时不覆盖、transport shim 在「宿主已赋值」与「宿主晚赋值」两种时序下都生效。
+共 60 项测试。`test/proxy.test.js` 启动真实 HTTP 服务并以假上游模拟 DSH 的 401 / 303+Cookie / 200 响应，覆盖握手、头改写、Cookie 卫生与限速；`test/inject.test.js` 实际执行注入脚本，验证 polyfill 生成的 UUID 符合 RFC 4122、原生实现存在时不覆盖、transport shim 在宿主先赋值与后赋值两种时序下均生效。
 
 ## License
 

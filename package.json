@@ -1,7 +1,7 @@
 {
   "name": "dsh-web-gate",
   "version": "0.2.0",
-  "description": "给 DeepSeek Harness Web UI 加一层带密码的局域网网关：手机浏览器直接访问，不改动 DSH 页面。",
+  "description": "DeepSeek Harness 的局域网网关：密码认证，同网段浏览器访问，不修改 DSH 页面。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
