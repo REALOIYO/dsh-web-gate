@@ -1,0 +1,17 @@
+# dsh-web-gate bundle patch（dsh.bundle manifest 要求的加载配置）
+#
+# 只做一件事：在 Host 进程里起一个带密码的 loopback 网关，
+# 让同一局域网内的手机浏览器能访问 DSH Web UI。
+#
+# 刻意不声明 dsh.client：本插件不向页面注入任何代码，DSH 界面保持原样。
+- insert:
+    - id: dsh-web-gate
+      name: dsh-web-gate
+      config:
+        # 网关监听端口（手机访问这个端口）
+        port: 3082
+        # 监听地址。0.0.0.0 = 所有网卡；填某个局域网 IP 则只监听它
+        host: "0.0.0.0"
+        # 访问密码，至少 8 位。留空则首次启动随机生成并写入
+        # $DSH_HOME/dsh-web-gate/settings.json，同时打印到日志
+        password: ""

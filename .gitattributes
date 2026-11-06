@@ -1,0 +1,11 @@
+# 统一行尾，避免 Windows checkout 后产生大规模伪改动
+* text=auto
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary
