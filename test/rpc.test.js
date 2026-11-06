@@ -57,6 +57,42 @@ function fakeRes() {
   };
 }
 
+/**
+ * 假 IncomingMessage。
+ *
+ * `readBody` 是**订阅式**的（先 on('data')/on('end')，再由事件驱动回调），
+ * 所以 body 必须在监听器注册完之后才投递 —— 放到微任务里。
+ */
+function fakeReq(url, method = 'GET', body = '') {
+  const listeners = new Map();
+  const req = {
+    url,
+    method,
+    headers: {},
+    readableEnded: false,
+    on(event, fn) {
+      if (!listeners.has(event)) listeners.set(event, []);
+      listeners.get(event).push(fn);
+      return req;
+    },
+    destroy() {},
+    setTimeout() {},
+  };
+  queueMicrotask(() => {
+    if (body) for (const fn of listeners.get('data') ?? []) fn(body);
+    for (const fn of listeners.get('end') ?? []) fn();
+  });
+  return req;
+}
+
+/** 驱动一次请求。因为 readBody 是异步投递的，响应要等一个宏任务。 */
+async function call(route, url, method = 'GET', body = '') {
+  const res = fakeRes();
+  route.handler(fakeReq(url, method, body), res);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return res;
+}
+
 function setup(options = {}) {
   const dir = options.dir ?? mkdtempSync(join(tmpdir(), 'dsh-web-gate-rpc-'));
   const settings = {
@@ -76,13 +112,7 @@ function setup(options = {}) {
   return { dir, settings, auth, gate, remove, currentRoute, ownedDir: options.dir === undefined };
 }
 
-function call(route, url, method = 'GET') {
-  const res = fakeRes();
-  route.handler({ url, method, headers: {} }, res);
-  return res;
-}
-
-test('注册到 webServer，路径与 kind 正确', (t) => {
+test('注册到 webServer，路径与 kind 正确', async (t) => {
   const s = setup();
   t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
 
@@ -96,11 +126,11 @@ test('注册到 webServer，路径与 kind 正确', (t) => {
   assert.equal(s.currentRoute(), null, '清理函数应该注销 route');
 });
 
-test('status 返回端口、地址与密码', (t) => {
+test('status 返回端口、地址与密码', async (t) => {
   const s = setup();
   t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
 
-  const res = call(s.currentRoute(), `${RPC_PATH}/status`);
+  const res = await call(s.currentRoute(), `${RPC_PATH}/status`);
   assert.equal(res.statusCode, 200);
   assert.match(res.headers['content-type'], /application\/json/);
 
@@ -113,23 +143,23 @@ test('status 返回端口、地址与密码', (t) => {
   assert.ok(Array.isArray(data.addresses));
 });
 
-test('status 反映上游会话与监听状态', (t) => {
+test('status 反映上游会话与监听状态', async (t) => {
   const s = setup({ listening: false, upstreamCookie: 'dsh-auth-xyz' });
   t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
 
-  const data = JSON.parse(call(s.currentRoute(), `${RPC_PATH}/status`).body);
+  const data = JSON.parse((await call(s.currentRoute(), `${RPC_PATH}/status`)).body);
   assert.equal(data.running, false);
   assert.equal(data.upstreamBound, true);
 });
 
-test('rotate 换密码、落盘、并让旧会话失效', (t) => {
+test('rotate 换密码、落盘、并让旧会话失效', async (t) => {
   const s = setup();
   t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
 
-  const before = call(s.currentRoute(), `${RPC_PATH}/status`).body;
+  const before = (await call(s.currentRoute(), `${RPC_PATH}/status`)).body;
   assert.equal(JSON.parse(before).password, PASSWORD);
 
-  const res = call(s.currentRoute(), `${RPC_PATH}/rotate`, 'POST');
+  const res = await call(s.currentRoute(), `${RPC_PATH}/rotate`, 'POST');
   assert.equal(res.statusCode, 200);
   const next = JSON.parse(res.body).password;
   assert.notEqual(next, PASSWORD);
@@ -140,44 +170,144 @@ test('rotate 换密码、落盘、并让旧会话失效', (t) => {
   assert.equal(saved.password, next);
   assert.equal(saved.secret, SECRET, '密钥不该被动');
 
-  // auth 已切换到新密码：旧的会话值立刻失效
+  // auth 已切换到新密码
   assert.equal(s.auth.checkPassword(next), true);
   assert.equal(s.auth.checkPassword(PASSWORD), false);
-  const value = next; // 会话值不是密码本身，这里只验证密码校验路径
-  assert.ok(value.length > 0);
 
   // status 也跟着变
-  const after = JSON.parse(call(s.currentRoute(), `${RPC_PATH}/status`).body);
+  const after = JSON.parse((await call(s.currentRoute(), `${RPC_PATH}/status`)).body);
   assert.equal(after.password, next);
 });
 
-test('rotate 拒绝非 POST', (t) => {
+test('rotate 支持自定义密码（用户自己定，不用随机串）', async (t) => {
   const s = setup();
   t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
 
-  const res = call(s.currentRoute(), `${RPC_PATH}/rotate`, 'GET');
+  const custom = 'my-own-pass-2026';
+  const res = await call(
+    s.currentRoute(),
+    `${RPC_PATH}/rotate`,
+    'POST',
+    JSON.stringify({ password: custom }),
+  );
+  assert.equal(res.statusCode, 200);
+
+  const data = JSON.parse(res.body);
+  assert.equal(data.password, custom, '返回的应该就是自定义值，不是随机串');
+  assert.equal(data.custom, true, '应该标明这是自定义密码');
+
+  const saved = JSON.parse(readFileSync(join(s.dir, 'settings.json'), 'utf8'));
+  assert.equal(saved.password, custom);
+  assert.equal(saved.secret, SECRET, '密钥不该被动');
+
+  assert.equal(s.auth.checkPassword(custom), true);
+  assert.equal(s.auth.checkPassword(PASSWORD), false);
+
+  const status = JSON.parse((await call(s.currentRoute(), `${RPC_PATH}/status`)).body);
+  assert.equal(status.password, custom);
+});
+
+test('rotate 支持中文与符号的自定义密码', async (t) => {
+  const s = setup();
+  t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
+
+  const custom = '今天天气不错-2026!';
+  const res = await call(
+    s.currentRoute(),
+    `${RPC_PATH}/rotate`,
+    'POST',
+    JSON.stringify({ password: custom }),
+  );
+  assert.equal(res.statusCode, 200);
+  assert.equal(JSON.parse(res.body).password, custom);
+  assert.equal(s.auth.checkPassword(custom), true);
+  assert.equal(
+    JSON.parse(readFileSync(join(s.dir, 'settings.json'), 'utf8')).password,
+    custom,
+  );
+});
+
+test('rotate 拒绝太短的自定义密码，并且什么都不改', async (t) => {
+  const s = setup();
+  t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
+
+  const res = await call(
+    s.currentRoute(),
+    `${RPC_PATH}/rotate`,
+    'POST',
+    JSON.stringify({ password: 'short' }),
+  );
+  assert.equal(res.statusCode, 400);
+  assert.match(JSON.parse(res.body).error, /至少 8 位/);
+
+  assert.equal(s.settings.password, PASSWORD, '被拒时不该改动内存里的密码');
+  assert.equal(s.auth.checkPassword(PASSWORD), true, '旧密码应该仍然有效');
+});
+
+test('rotate 拒绝控制字符的自定义密码', async (t) => {
+  const s = setup();
+  t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
+
+  const res = await call(
+    s.currentRoute(),
+    `${RPC_PATH}/rotate`,
+    'POST',
+    JSON.stringify({ password: 'long-enough\u0000but-bad' }),
+  );
+  assert.equal(res.statusCode, 400);
+  assert.match(JSON.parse(res.body).error, /控制字符/);
+  assert.equal(s.auth.checkPassword(PASSWORD), true);
+});
+
+test('rotate 不带自定义值时仍然随机生成', async (t) => {
+  const s = setup();
+  t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
+
+  const res = await call(s.currentRoute(), `${RPC_PATH}/rotate`, 'POST', JSON.stringify({}));
+  assert.equal(res.statusCode, 200);
+  const data = JSON.parse(res.body);
+  assert.equal(data.custom, false);
+  assert.ok(data.password.length >= 8);
+  assert.notEqual(data.password, PASSWORD);
+});
+
+test('rotate 容忍非 JSON 请求体，退回随机生成', async (t) => {
+  const s = setup();
+  t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
+
+  const res = await call(s.currentRoute(), `${RPC_PATH}/rotate`, 'POST', 'not-json-at-all');
+  assert.equal(res.statusCode, 200);
+  assert.equal(JSON.parse(res.body).custom, false);
+  assert.notEqual(JSON.parse(res.body).password, PASSWORD);
+});
+
+test('rotate 拒绝非 POST', async (t) => {
+  const s = setup();
+  t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
+
+  const res = await call(s.currentRoute(), `${RPC_PATH}/rotate`, 'GET');
   assert.equal(res.statusCode, 405);
 });
 
-test('requestRejection 的判定被遵守', (t) => {
+test('requestRejection 的判定被遵守', async (t) => {
   const s = setup({ rejection: 403 });
   t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
 
-  const res = call(s.currentRoute(), `${RPC_PATH}/status`);
+  const res = await call(s.currentRoute(), `${RPC_PATH}/status`);
   assert.equal(res.statusCode, 403);
   assert.equal(res.body, 'forbidden');
   assert.equal(res.headers['content-type'], 'text/plain; charset=utf-8');
 });
 
-test('未知路径返回 404', (t) => {
+test('未知路径返回 404', async (t) => {
   const s = setup();
   t.after(() => s.ownedDir && rmSync(s.dir, { recursive: true, force: true }));
 
-  const res = call(s.currentRoute(), `${RPC_PATH}/nope`);
+  const res = await call(s.currentRoute(), `${RPC_PATH}/nope`);
   assert.equal(res.statusCode, 404);
 });
 
-test('没有 webServer 时安静退化为空清理函数', () => {
+test('没有 webServer 时安静退化为空清理函数', async () => {
   const remove = installGateRpc({}, { gate: {}, auth: {}, settings: {}, log: silent });
   assert.equal(typeof remove, 'function');
   remove();

@@ -84,6 +84,8 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('');
       const [rotating, setRotating] = useState(false);
       const [showPassword, setShowPassword] = useState(false);
+      /** 自定义密码的草稿值；空 = 走随机生成。 */
+      const [draft, setDraft] = useState('');
 
       const load = useCallback(async () => {
         try {
@@ -100,16 +102,29 @@ window.__ModuleLoader__.load({
         load();
       }, [load]);
 
-      const rotate = useCallback(async () => {
-        if (!window.confirm('换密码后，所有已登录的手机都要重新输入。继续？')) return;
+      /**
+       * 换密码。next 为空 → 随机生成；非空 → 设为自定义值。
+       * 注意别把 onClick 直接写成 `rotate`：那样事件对象会被当成 next。
+       */
+      const rotate = useCallback(async (next) => {
+        const custom = typeof next === 'string' && next.length > 0;
+        const hint = custom
+          ? `把访问密码设为「${next}」？所有已登录的手机都要重新输入。`
+          : '换一个随机密码？所有已登录的手机都要重新输入。';
+        if (!window.confirm(hint)) return;
         setRotating(true);
         try {
-          const res = await fetch(`${API}/rotate`, { method: 'POST' });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
+          const res = await fetch(`${API}/rotate`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(custom ? { password: next } : {}),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
           setState((prev) => (prev ? { ...prev, password: data.password } : prev));
           setShowPassword(true);
           setError('');
+          setDraft('');
         } catch (e) {
           setError(`换密码失败：${(e && e.message) || e}`);
         } finally {
@@ -158,8 +173,32 @@ window.__ModuleLoader__.load({
             h(CopyButton, { text: password }),
             h(
               'button',
-              { type: 'button', style: styles.btn, onClick: rotate, disabled: rotating },
-              rotating ? '换中…' : '换一个',
+              { type: 'button', style: styles.btn, onClick: () => rotate(''), disabled: rotating },
+              rotating ? '换中…' : '随机换一个',
+            ),
+          ),
+          h(
+            'div',
+            { style: styles.row },
+            h('input', {
+              type: 'text',
+              value: draft,
+              placeholder: '也可以自己定一个（至少 8 位）',
+              onChange: (e) => setDraft(e.target.value),
+              onKeyDown: (e) => {
+                if (e.key === 'Enter' && draft.length >= 8 && !rotating) rotate(draft);
+              },
+              style: { ...styles.mono, minWidth: 180, fontFamily: 'inherit' },
+            }),
+            h(
+              'button',
+              {
+                type: 'button',
+                style: styles.btn,
+                disabled: rotating || draft.length < 8,
+                onClick: () => rotate(draft),
+              },
+              '用这个密码',
             ),
           ),
           h(
