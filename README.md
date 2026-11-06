@@ -47,9 +47,11 @@ DSH 的本地认证 Cookie 名是 `dsh-auth-<sha256(host:port)>`——**名字�
 
 所以本网关：上游的 `Set-Cookie` **一律拦下存内存**，转发时也只注入当前那一个。手机侧永远只有网关自己的 `dsh_gate_session` 一个 Cookie，不存在累积。
 
-**3. 不改页面**
+**3. 只加一个设置面板，不碰主界面**
 
-`package.json` 里刻意没有 `dsh.client` 段落，所以 DSH 不会往浏览器加载任何本插件的脚本。网关只做转发 + 认证，不碰 DOM、不加 URL 参数、不做移动端适配。界面窄屏下好不好看，那是 DSH 自己的事。
+客户端只有 `client/client.js` 一个手写文件（不打包），只做一件事：往设置侧栏注册一个「手机网关」入口——显示访问地址和密码、一键复制、换密码。
+
+它不注入样式、不改 DOM、不加 URL 标记、不做移动端适配。DSH 的界面本身保持原样；窄屏下好不好看是 DSH 自己的事。
 
 ## 安装
 
@@ -67,6 +69,8 @@ dsh plugin --profile desktop add dsh-web-gate
 ```
 
 手机连同一个 WiFi，浏览器打开那个地址，输密码即可。
+
+同一个地址也出现在 **设置 → 手机网关**：带复制按钮、`显示/隐藏` 密码、以及 `换一个` 密码。
 
 ## 配置
 
@@ -108,7 +112,7 @@ dsh plugin --profile desktop add dsh-web-gate
 
 | | dsh-web-gate | dsh-pocket |
 |---|---|---|
-| 页面注入 | **无** | 有（移动端适配、polyfill、桌面端兼容层） |
+| 界面改动 | **仅设置页一个入口** | 移动端适配 + polyfill + 桌面端兼容层 |
 | 上游 Cookie | **扣在服务端** | 透传给客户端 |
 | 公网访问 | 不做 | cloudflared 隧道 |
 | 依赖 | 零运行时依赖 | qrcode 等 |

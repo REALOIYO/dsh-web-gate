@@ -1,20 +1,22 @@
 {
   "name": "dsh-web-gate",
-  "version": "0.1.0",
-  "description": "给 DeepSeek Harness Web UI 加一层带密码的局域网网关：手机浏览器直接访问，不注入任何页面代码。",
+  "version": "0.2.0",
+  "description": "给 DeepSeek Harness Web UI 加一层带密码的局域网网关：手机浏览器直接访问，不改动 DSH 页面。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
-    ".": "./lib/index.js"
+    ".": "./lib/index.js",
+    "./client": "./client/client.js"
   },
   "files": [
     "lib",
+    "client",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test --test-timeout=30000 \"test/*.test.js\""
+    "test": "node --test --test-timeout=30000 test/*.test.js"
   },
   "engines": {
     "node": ">=22"
@@ -36,6 +38,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
     }
   }
 }
