@@ -4,3 +4,6 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 *.tmp
+
+# 网关自身配置（含明文访问密码与签名密钥），永远不要提交
+settings.json
