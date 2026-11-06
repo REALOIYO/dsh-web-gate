@@ -19,8 +19,10 @@
 
 ## 安装
 
+还没发布到 npm，直接从仓库装：
+
 ```sh
-dsh plugin --profile desktop add dsh-web-gate
+dsh plugin --profile desktop add github:REALOIYO/dsh-web-gate
 ```
 
 装完重启 DSH。地址和密码会打进日志，也出现在 **设置 → 手机网关**（带复制与换密码）。
