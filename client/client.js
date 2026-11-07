@@ -11,7 +11,7 @@
  * 不碰主界面、不注入样式、不加 URL 标记 —— DSH 页面保持原样。
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-web-gate',
+  id: '@realoiyo/dsh-web-gate',
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
