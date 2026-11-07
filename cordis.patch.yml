@@ -6,7 +6,7 @@
 # 刻意不声明 dsh.client：本插件不向页面注入任何代码，DSH 界面保持原样。
 - insert:
     - id: dsh-web-gate
-      name: dsh-web-gate
+      name: '@realoiyo/dsh-web-gate'
       config:
         # 网关监听端口（手机访问这个端口）
         port: 3082

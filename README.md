@@ -19,7 +19,13 @@
 
 ## 安装
 
-尚未发布至 npm，从仓库安装：
+从 npm 安装：
+
+```sh
+dsh plugin --profile desktop add @realoiyo/dsh-web-gate
+```
+
+也可以从 GitHub 直接装（会走源码构建）：
 
 ```sh
 dsh plugin --profile desktop add github:REALOIYO/dsh-web-gate
